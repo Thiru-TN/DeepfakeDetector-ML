@@ -1,0 +1,115 @@
+
+Datasets:
+
+
+DFDC  (Facebook Challenge)
+
+Celeb-DF v2
+
+WildDeepfake (Use for evaluation)
+
+Deepfake-Eval-2024 (Use for evaluation)
+
+
+
+LATER:
+
+FaceForensics++
+	https://arxiv.org/abs/1901.08971
+	https://arxiv.org/pdf/1901.08971
+	https://github.com/ondyari/FaceForensics
+
+Fake Face Dataset (DFFD)  [Both video and Image]
+
+https://www.kaggle.com/datasets/sanikatiwarekar/deep-fake-detection-dfd-entire-original-dataset/data
+
+
+MAYBE:
+
+DeepfakeBench	
+OpenForensics
+DFGC, FFIW-10K	 (Competition Datasets)	
+
+
+NOT USING:
+
+EBV (Eye Blinking)	
+FaceForensics  (old)
+
+DFDC (450 GB)
+DeeperForensics-1.0  (100s of GB)
+ForgeryNet (video)	(TB)
+
+Image Datasets: (Not using)
+
+	ForgeryNet (High storage)  	
+
+	Flickr-Faces-HQ, (FFHQ)  [GAN Synthesized Image]
+	100K-Faces  [StyleGAN Synthesized]
+	iFakeFaceDB	[GAN based]
+
+
+
+
+To look for:
+
+Hard for AI to replicate human behaviour
+
+Blinking
+
+Temporal Inconsistencies and instability are present in deepfake
+Expression Transition problem
+
+Fingerprints of GANs
+
+Small periodic skin color changes caused by blood flowing through face
+Heartbeat rhythms to detect deepfakes
+
+
+
+Future:
+
+Necklace or instrument to poison deepfake videos
+
+Embedding signals into video data to stop deepfake videos
+
+
+
+
+Current methods:
+
+Face2Face
+FaceSwap
+DeepFakes
+NeuralTextures
+
+Deepface Lab
+FakeApp
+diffusion models
+
+
+Nvidia generated from Flickr
+
+
+
+
+Notes:
+
+In the GAN (Generative Adversarial Network) context,
+
+A mode means a distinct pattern or distribution present in the real dataset.
+
+Think of it as a cluster of variations in your data.
+
+For example:
+
+If your dataset has faces of men, women, and children, then each category is a mode.
+
+If you’re generating handwritten digits (0–9 from MNIST), then each digit (0, 1, …, 9) is a mode.
+
+
+
+
+References:
+
+
