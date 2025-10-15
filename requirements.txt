@@ -1,0 +1,33 @@
+# FastAPI Backend Requirements
+
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+
+# Deep Learning
+torch==2.5.1
+torchvision==0.20.1
+efficientnet-pytorch==0.7.1
+
+# Computer Vision
+opencv-python==4.8.1.78
+opencv-contrib-python==4.8.1.78
+Pillow==10.1.0
+
+# Face Detection
+facenet-pytorch==2.5.3  # MTCNN
+# Alternative: mediapipe==0.10.7
+
+# Data Processing
+numpy>=1.26.0  # Compatible with Python 3.12
+pandas>=2.1.0
+
+# Logging & Monitoring
+python-json-logger==2.0.7
+
+# Optional (for production)
+# gunicorn==21.2.0
+# redis==5.0.1
+# celery==5.3.4

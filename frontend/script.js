@@ -1,3 +1,247 @@
+const API_BASE_URL = 'http://localhost:8000';
+
+// Add at the top of your existing script.js
+
+// API Communication Functions
+async function analyzeVideoWithBackend(file) {
+  try {
+    // Show loading state
+    showLoadingState();
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await fetch(`${API_BASE_URL}/analyze`, {
+      method: 'POST',
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Analysis failed');
+    }
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      displayAnalysisResults(result.results);
+    } else {
+      showError(result.error || 'Analysis failed');
+    }
+    
+  } catch (error) {
+    console.error('Analysis error:', error);
+    showError(error.message);
+  }
+}
+
+function showLoadingState() {
+  const resultStatus = document.getElementById("result-status");
+  const resultMessage = document.getElementById("result-message");
+  const confidenceFill = document.getElementById("confidence-fill");
+  const confidenceText = document.getElementById("confidence-text");
+  
+  resultStatus.textContent = "ANALYZING...";
+  resultStatus.className = "result-status analyzing";
+  resultMessage.textContent = "Processing video frames and analyzing for deepfake patterns...";
+  confidenceFill.style.width = "0%";
+  confidenceText.textContent = "Processing...";
+  
+  // Animate loading
+  let progress = 0;
+  const loadingInterval = setInterval(() => {
+    progress += 2;
+    if (progress <= 90) {
+      confidenceFill.style.width = progress + "%";
+    } else {
+      clearInterval(loadingInterval);
+    }
+  }, 100);
+  
+  // Store interval ID for cleanup
+  window.loadingInterval = loadingInterval;
+}
+
+function displayAnalysisResults(results) {
+  // Clear loading interval
+  if (window.loadingInterval) {
+    clearInterval(window.loadingInterval);
+  }
+  
+  const resultStatus = document.getElementById("result-status");
+  const resultMessage = document.getElementById("result-message");
+  const confidenceFill = document.getElementById("confidence-fill");
+  const confidenceText = document.getElementById("confidence-text");
+  
+  const isDeepfake = results.final_verdict === 'FAKE';
+  const confidence = results.avg_confidence * 100;
+  const fakeScore = results.avg_fake_score * 100;
+  
+  // Update status
+  if (results.final_verdict === 'UNCERTAIN') {
+    resultStatus.textContent = "UNCERTAIN RESULT";
+    resultStatus.className = "result-status uncertain";
+    resultMessage.textContent = 
+      `Unable to make confident determination. Confidence level: ${confidence.toFixed(1)}%. Manual review recommended.`;
+    confidenceFill.className = "confidence-fill uncertain-fill";
+  } else if (isDeepfake) {
+    resultStatus.textContent = "DEEPFAKE DETECTED";
+    resultStatus.className = "result-status deepfake-detected";
+    resultMessage.textContent = 
+      `Our analysis indicates this media contains synthetic elements (${fakeScore.toFixed(1)}% fake probability). ` +
+      `Artificial manipulation patterns were detected. Frames analyzed: ${results.frames_analyzed}, ` +
+      `Face detection rate: ${(results.face_detection_rate * 100).toFixed(0)}%.`;
+    confidenceFill.className = "confidence-fill";
+  } else {
+    resultStatus.textContent = "AUTHENTIC MEDIA";
+    resultStatus.className = "result-status authentic-detected";
+    resultMessage.textContent = 
+      `Analysis confirms this media appears to be genuine (${(100 - fakeScore).toFixed(1)}% authentic probability). ` +
+      `No significant artificial manipulation patterns were detected. Frames analyzed: ${results.frames_analyzed}.`;
+    confidenceFill.className = "confidence-fill authentic-fill";
+  }
+  
+  // Animate confidence bar
+  setTimeout(() => {
+    confidenceFill.style.width = confidence + "%";
+    confidenceText.textContent = `Confidence: ${confidence.toFixed(1)}%`;
+  }, 300);
+  
+  // Update metrics with real data
+  setTimeout(() => {
+    document.getElementById("facial-metric").textContent = 
+      (results.face_detection_rate * 100).toFixed(1) + "%";
+    document.getElementById("temporal-metric").textContent = 
+      ((1 - results.score_volatility) * 100).toFixed(1) + "%";
+    document.getElementById("artifact-metric").textContent = 
+      (confidence).toFixed(1) + "%";
+    document.getElementById("overall-metric").textContent = 
+      confidence.toFixed(1) + "%";
+  }, 600);
+  
+  // Log detailed results to console for debugging
+  console.log('Analysis Results:', results);
+}
+
+function showError(message) {
+  const resultStatus = document.getElementById("result-status");
+  const resultMessage = document.getElementById("result-message");
+  const confidenceFill = document.getElementById("confidence-fill");
+  const confidenceText = document.getElementById("confidence-text");
+  
+  resultStatus.textContent = "ANALYSIS ERROR";
+  resultStatus.className = "result-status error";
+  resultMessage.textContent = `Error: ${message}. Please try again with a different video.`;
+  confidenceFill.style.width = "0%";
+  confidenceFill.className = "confidence-fill error-fill";
+  confidenceText.textContent = "Error";
+}
+
+// REPLACE your existing handleFileUpload function with this:
+function handleFileUpload(file) {
+  // Validate file type
+  const validVideoTypes = ['video/mp4', 'video/avi', 'video/mov', 'video/x-matroska'];
+  const validImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+  
+  if (!validVideoTypes.includes(file.type) && !validImageTypes.includes(file.type)) {
+    showError('Invalid file type. Please upload MP4, AVI, MOV, MKV, JPG, or PNG files.');
+    return;
+  }
+  
+  // Check file size (max 500MB)
+  const maxSize = 500 * 1024 * 1024;
+  if (file.size > maxSize) {
+    showError('File too large. Maximum size is 500MB.');
+    return;
+  }
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const result = e.target.result;
+    let mediaElement;
+
+    if (file.type.startsWith("image/")) {
+      mediaElement = document.createElement("img");
+      mediaElement.src = result;
+      mediaElement.className = "preview-media glitch-image";
+      mediaElement.id = "uploaded-media";
+    } else if (file.type.startsWith("video/")) {
+      mediaElement = document.createElement("video");
+      mediaElement.src = result;
+      mediaElement.className = "preview-media";
+      mediaElement.controls = true;
+      mediaElement.id = "uploaded-media";
+    }
+
+    if (mediaElement) {
+      const previewContent = document.getElementById("preview-content");
+      const previewArea = document.getElementById("preview-area");
+      
+      previewContent.innerHTML = "";
+      previewContent.appendChild(mediaElement);
+      previewArea.style.display = "block";
+
+      setTimeout(() => {
+        new Glitch("uploaded-media", "high");
+      }, 100);
+
+      // Navigate to analysis section
+      setTimeout(() => {
+        goToSection(3);
+        
+        // IMPORTANT: Call backend analysis (only for videos)
+        if (file.type.startsWith("video/")) {
+          setTimeout(() => {
+            analyzeVideoWithBackend(file);
+          }, 500);
+        } else {
+          // For images, use fallback simulation
+          setTimeout(() => {
+            simulateAnalysis();
+          }, 500);
+        }
+      }, 1000);
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+// OPTIONAL: Add CSS for new states
+const additionalStyles = `
+  <style>
+    .result-status.analyzing {
+      color: #00b4d8;
+      animation: pulse 1.5s infinite;
+    }
+    
+    .result-status.uncertain {
+      color: #ffa500;
+    }
+    
+    .result-status.error {
+      color: #ff6b6b;
+    }
+    
+    .confidence-fill.uncertain-fill {
+      background: linear-gradient(90deg, #ffa500, #ffcc00);
+    }
+    
+    .confidence-fill.error-fill {
+      background: linear-gradient(90deg, #ff6b6b, #ff8787);
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+  </style>
+`;
+
+// Inject additional styles
+document.head.insertAdjacentHTML('beforeend', additionalStyles);
+
+
+
 class Glitch {
         constructor(imageId, intensity = "medium") {
           this.img = document.getElementById(imageId);
