@@ -23,9 +23,9 @@ detector = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global detector
-    model_path = os.getenv("MODEL_PATH", "../models/best_fusion_model.pth")
-    scaler_path = os.getenv("SCALER_PATH", "../models/scaler.pkl")
-    
+    model_path = os.getenv("MODEL_PATH", "../models_all/best_fusion_model.pth")
+    scaler_path = os.getenv("SCALER_PATH", "../models_all/scaler.pkl")
+
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
     

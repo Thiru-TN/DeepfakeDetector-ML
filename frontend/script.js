@@ -402,35 +402,64 @@ document.addEventListener("DOMContentLoaded", function () {
     }, 2000);
   }
 
-  function playToPausePoint(startTime, pauseTime) {
-    if (pauseTimeout) clearTimeout(pauseTimeout);
-    isTransitioning = true;
-    video.currentTime = startTime;
-    video.play().catch(() => {});
-    const timeUntilPause = (pauseTime - startTime) * 1000;
-    pauseTimeout = setTimeout(() => {
-      video.pause();
+  // Replace your current video control section with this:
+
+function playToPausePoint(startTime, pauseTime) {
+  if (pauseTimeout) clearTimeout(pauseTimeout);
+  isTransitioning = true;
+
+  video.currentTime = startTime;
+  
+  // Better error handling for video playback
+  const playPromise = video.play();
+  
+  if (playPromise !== undefined) {
+    playPromise.catch(error => {
+      console.log('Video play failed, trying again:', error);
+      // Auto-play might be blocked, but we'll still proceed
       isTransitioning = false;
-    }, timeUntilPause);
+    });
   }
 
-  function goToSection(index) {
-    if (index < 0 || index >= sections.length || isTransitioning) return;
-    currentSection = index;
-    updateActiveButton(index);
-    showSection(index);
+  const timeUntilPause = (pauseTime - startTime) * 1000;
+  pauseTimeout = setTimeout(() => {
+    // Only pause if we're still at the expected section
+    if (!isTransitioning || Math.abs(video.currentTime - pauseTime) < 2) {
+      video.pause();
+    }
+    isTransitioning = false;
+  }, timeUntilPause);
+}
+
+function goToSection(index) {
+  if (index < 0 || index >= sections.length || isTransitioning) return;
+  
+  // Ensure video is ready
+  if (video.readyState < 2) {
+    console.log('Video not ready, waiting...');
+    setTimeout(() => goToSection(index), 100);
+    return;
+  }
+  
+  currentSection = index;
+  updateActiveButton(index);
+  showSection(index);
+  
+  // Add a small delay to ensure DOM updates complete
+  setTimeout(() => {
     playToPausePoint(sections[index].start, sections[index].pause);
+  }, 50);
 
-    if (index === 4) {
-      setTimeout(() => createPerformanceChart(), 600);
-    }
+  if (index === 4) {
+    setTimeout(() => createPerformanceChart(), 600);
   }
+}
 
-  function nextSection() {
-    if (currentSection < sections.length - 1) {
-      goToSection(currentSection + 1);
-    }
+function nextSection() {
+  if (currentSection < sections.length - 1) {
+    goToSection(currentSection + 1);
   }
+}
 
   window.goToSection = goToSection;
   window.nextSection = nextSection;
