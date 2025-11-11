@@ -1,4 +1,3 @@
-models/
-*.pth
+models_all
 
 deepfake

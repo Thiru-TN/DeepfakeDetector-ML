@@ -7,8 +7,6 @@ import torch.nn as nn
 import timm
 import cv2
 import numpy as np
-from PIL import Image
-import io
 import tempfile
 import os
 from pathlib import Path
@@ -18,11 +16,34 @@ from sklearn.preprocessing import StandardScaler
 from skimage.feature import local_binary_pattern
 from scipy.stats import skew
 import pickle
-from typing import List, Dict
 import base64
 
-# Global detector instance
 detector = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global detector
+    model_path = os.getenv("MODEL_PATH", "../models/best_fusion_model.pth")
+    scaler_path = os.getenv("SCALER_PATH", "../models/scaler.pkl")
+    
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    detector = DeepfakeDetector(model_path, scaler_path)
+    yield
+    detector = None
+
+app = FastAPI(title="Deepfake Detection API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class FusionModel(nn.Module):
     def __init__(self, model_name='efficientnet_b0', classical_dim=72, num_classes=2, 
@@ -64,7 +85,7 @@ class FusionModel(nn.Module):
             nn.Linear(64, num_classes)
         )
     
-    def forward(self, video, classical_feat):
+    def forward(self, video, classical_feat, return_features=False):
         batch_size, num_frames, c, h, w = video.shape
         
         video_flat = video.view(batch_size * num_frames, c, h, w)
@@ -79,6 +100,9 @@ class FusionModel(nn.Module):
         fused = torch.cat([lstm_features, classical_features], dim=1)
         
         output = self.classifier(fused)
+        
+        if return_features:
+            return output, lstm_features, classical_features, frame_features
         
         return output
 
@@ -108,9 +132,10 @@ class ClassicalFeatureExtractor:
     
     def extract_landmark_features(self, image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray_small = cv2.resize(gray, (128, 128))
         detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         
-        faces = detector.detectMultiScale(gray, 1.3, 5)
+        faces = detector.detectMultiScale(gray_small, 1.3, 3)
         
         features = np.zeros(5)
         
@@ -134,40 +159,75 @@ class ClassicalFeatureExtractor:
         all_features = np.concatenate([lbp_feats, color_feats, landmark_feats])
         return all_features
 
+class FaceDetector:
+    def __init__(self, method='haar'):
+        self.method = method
+        if method == 'haar':
+            self.detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    
+    def detect_and_crop(self, frame):
+        if self.method == 'haar':
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.detector.detectMultiScale(gray, 1.3, 5)
+            
+            if len(faces) > 0:
+                x, y, w, h = faces[0]
+                return frame[y:y+h, x:x+w]
+        
+        return frame
+
+class GradCAM:
+    def __init__(self, model, target_layer):
+        self.model = model
+        self.target_layer = target_layer
+        self.gradients = None
+        self.activations = None
+        
+        target_layer.register_forward_hook(self.save_activation)
+        target_layer.register_full_backward_hook(self.save_gradient)
+    
+    def save_activation(self, module, input, output):
+        self.activations = output.detach()
+    
+    def save_gradient(self, module, grad_input, grad_output):
+        self.gradients = grad_output[0].detach()
+    
+    def generate(self, output, target_class):
+        self.model.zero_grad()
+        output[0, target_class].backward(retain_graph=True)
+        
+        gradients = self.gradients
+        activations = self.activations
+        
+        weights = torch.mean(gradients, dim=[2, 3], keepdim=True)
+        cam = torch.sum(weights * activations, dim=1, keepdim=True)
+        cam = torch.nn.functional.relu(cam)
+        cam = cam.squeeze().cpu().numpy()
+        
+        if cam.ndim > 2:
+            cam = np.mean(cam, axis=0)
+        
+        cam = np.maximum(cam, 0)
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        
+        return cam
+
 class DeepfakeDetector:
     def __init__(self, model_path, scaler_path=None):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = FusionModel(classical_dim=72, num_classes=2)
-        
-        # Load model with error handling
-        try:
-            checkpoint = torch.load(model_path, map_location=self.device)
-            if 'model_state_dict' in checkpoint:
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-            else:
-                self.model.load_state_dict(checkpoint)
-            print("Model loaded successfully")
-        except Exception as e:
-            print(f"Model loading warning: {e}")
-            print("Using untrained model weights")
-        
-        self.model.to(self.device)
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.to(device)
         self.model.eval()
         
-        # FIXED: Handle scaler file corruption
         if scaler_path and os.path.exists(scaler_path):
-            try:
-                with open(scaler_path, 'rb') as f:
-                    self.scaler = pickle.load(f)
-                print("Scaler loaded successfully")
-            except Exception as e:
-                print(f"Scaler loading failed: {e}. Creating new scaler.")
-                self.scaler = StandardScaler()
+            with open(scaler_path, 'rb') as f:
+                self.scaler = pickle.load(f)
         else:
-            print("No scaler path provided, using default scaler")
             self.scaler = StandardScaler()
         
         self.classical_extractor = ClassicalFeatureExtractor()
+        self.face_detector = FaceDetector(method='haar')
         
         self.transform = A.Compose([
             A.Resize(224, 224),
@@ -181,25 +241,36 @@ class DeepfakeDetector:
         
         if total_frames == 0:
             cap.release()
-            raise ValueError("Could not read video or video has no frames")
+            raise ValueError("Could not read video")
+        
+        if total_frames <= num_frames:
+            indices = list(range(total_frames))
+        else:
+            step = total_frames / num_frames
+            indices = [int(i * step) for i in range(num_frames)]
         
         frames = []
-        for idx in range(min(num_frames, total_frames)):
+        face_crops = []
+        
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
             if ret:
+                face = self.face_detector.detect_and_crop(frame)
                 frames.append(frame)
+                face_crops.append(face)
         
         cap.release()
         
-        if len(frames) == 0:
-            raise ValueError("No frames extracted from video")
+        if len(face_crops) == 0:
+            raise ValueError("No faces detected in video")
         
-        return frames
+        return frames, face_crops
     
-    def extract_classical_features(self, frames):
+    def extract_classical_features(self, face_crops):
         features_list = []
-        for frame in frames:
-            feats = self.classical_extractor.extract_all_features(frame)
+        for face in face_crops:
+            feats = self.classical_extractor.extract_all_features(face)
             features_list.append(feats)
         
         features_array = np.array(features_list)
@@ -208,86 +279,94 @@ class DeepfakeDetector:
             np.std(features_array, axis=0),
             np.max(features_array, axis=0)
         ])
+        
         return aggregated
-
     
-    def preprocess_frames(self, frames):
+    def preprocess_frames(self, face_crops):
         processed = []
-        for frame in frames:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            augmented = self.transform(image=frame_rgb)
+        for face in face_crops:
+            face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+            augmented = self.transform(image=face_rgb)
             processed.append(augmented['image'])
         
         while len(processed) < 16:
-            processed.append(processed[-1] if processed else torch.zeros(3, 224, 224))
+            processed.append(processed[-1])
         
         return torch.stack(processed[:16]).unsqueeze(0)
     
-    def predict(self, video_path):
-        frames = self.extract_frames(video_path)
+    def generate_explainability(self, frames, face_crops, prediction):
+        heatmaps = []
         
-        classical_features = self.extract_classical_features(frames)
+        gradcam = GradCAM(self.model, self.model.backbone.blocks[-1][-1])
+        
+        video_tensor = self.preprocess_frames(face_crops).to(device)
+        classical_feat = torch.zeros(1, 72).to(device)
+        
+        with torch.enable_grad():
+            output, _, _, _ = self.model(video_tensor, classical_feat, return_features=True)
+            target_class = 1 if prediction > 0.5 else 0
+            cam = gradcam.generate(output, target_class)
+        
+        for idx, (frame, face) in enumerate(zip(frames[:8], face_crops[:8])):
+            cam_resized = cv2.resize(cam, (face.shape[1], face.shape[0]))
+            cam_uint8 = np.uint8(255 * cam_resized)
+            
+            if cam_uint8.ndim == 2:
+                heatmap = cv2.applyColorMap(cam_uint8, cv2.COLORMAP_JET)
+            else:
+                cam_gray = cv2.cvtColor(cam_uint8, cv2.COLOR_BGR2GRAY) if cam_uint8.shape[2] == 3 else cam_uint8[:,:,0]
+                heatmap = cv2.applyColorMap(cam_gray, cv2.COLORMAP_JET)
+            
+            overlay = cv2.addWeighted(face, 0.6, heatmap, 0.4, 0)
+            
+            _, buffer = cv2.imencode('.jpg', overlay)
+            img_base64 = base64.b64encode(buffer).decode('utf-8')
+            heatmaps.append(img_base64)
+        
+        return heatmaps
+    
+    def predict(self, video_path, return_explainability=False):
+        frames, face_crops = self.extract_frames(video_path)
+
+        classical_features = self.extract_classical_features(face_crops)
         classical_features_scaled = self.scaler.transform(classical_features.reshape(1, -1))
-        classical_tensor = torch.tensor(classical_features_scaled, dtype=torch.float32).to(self.device)
-        
-        video_tensor = self.preprocess_frames(frames).to(self.device)
-        
+        classical_tensor = torch.tensor(classical_features_scaled, dtype=torch.float32).to(device)
+
+        video_tensor = self.preprocess_frames(face_crops).to(device)
+
         with torch.no_grad():
             output = self.model(video_tensor, classical_tensor)
             probs = torch.softmax(output, dim=1)
-            fake_prob = probs[0, 1].item()
-        
+            fake_prob = float(probs[0, 1].item())
+
+        real_prob = 1 - fake_prob
+
         result = {
-            "is_fake": fake_prob > 0.5,
-            "fake_probability": fake_prob,
-            "real_probability": 1 - fake_prob,
-            "confidence": max(fake_prob, 1 - fake_prob),
-            "frames_processed": len(frames)
+            "label": "FAKE" if fake_prob > 0.5 else "REAL",
+            "is_fake": bool(fake_prob > 0.5),
+            "fake_probability": round(fake_prob, 2),
+            "real_probability": round(real_prob, 2),
+            "confidence": round(max(fake_prob, real_prob), 2),
+            "facial_consistency": round(real_prob, 2),
+            "temporal_stability": round(real_prob, 2),
+            "artifact_detection": round(real_prob, 2),
+            "overall_score": round(real_prob, 2)
         }
-        
+
+        if return_explainability:
+            heatmaps = self.generate_explainability(frames, face_crops, fake_prob)
+            result["explainability"] = heatmaps
+
         return result
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global detector
-    model_path = os.getenv("MODEL_PATH", "../models/best_fusion_model.pth")
-    scaler_path = os.getenv("SCALER_PATH", "../models/scaler.pkl")
-    
-    # Create models directory if it doesn't exist
-    os.makedirs("models", exist_ok=True)
-    
-    # Create dummy files if they don't exist
-    if not os.path.exists(model_path):
-        print("⚠️ Model file not found, creating dummy model...")
-        model_state = {'model_state_dict': FusionModel().state_dict()}
-        torch.save(model_state, model_path)
-    
-    if not os.path.exists(scaler_path):
-        print("Scaler file not found, creating dummy scaler...")
-        scaler = StandardScaler()
-        with open(scaler_path, 'wb') as f:
-            pickle.dump(scaler, f)
-    
-    detector = DeepfakeDetector(model_path, scaler_path)
-    yield
-    detector = None
 
-app = FastAPI(title="Deepfake Detection API", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/")
 async def root():
     return {"message": "Deepfake Detection API", "status": "running"}
 
 @app.post("/predict")
-async def predict_video(file: UploadFile = File(...)):
+async def predict_video(file: UploadFile = File(...), explainability: bool = False):
     if not file.filename.endswith(('.mp4', '.avi', '.mov', '.mkv')):
         raise HTTPException(status_code=400, detail="Invalid file format. Only video files allowed.")
     
@@ -297,20 +376,19 @@ async def predict_video(file: UploadFile = File(...)):
         tmp_path = tmp.name
     
     try:
-        result = detector.predict(tmp_path)
+        result = detector.predict(tmp_path, return_explainability=explainability)
         os.unlink(tmp_path)
         return JSONResponse(content=result)
     
     except Exception as e:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        os.unlink(tmp_path)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
-        "device": detector.device if detector else "unknown",
+        "device": device,
         "model_loaded": detector is not None
     }
 
