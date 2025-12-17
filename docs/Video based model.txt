@@ -1,0 +1,61 @@
+Video based model
+
+Image based model
+
+Explainable on both
+
+
+
+Facial distortion: small areas of the face may shift or blur
+
+Eye movement: Unnatural blinking rates or fixed gazes
+
+Lip Syncing issues: Mismatches between spoken words and lip movements
+
+
+
+frame distribution-file number-Data cleaning—Class balance—Frame consistency—Train-val-test split-check data leakage
+
+
+
+
+Frame-level
+Grad-CAM / Grad-CAM++
+Visualizes where the CNN looked in a single frame
+
+
+Model-level
+SHAP / LIME
+Explains which features contributed most to classification
+
+
+Signal-level
+Frequency/Noise pattern visualization
+Highlights unnatural blending, compression, or frequency inconsistencies
+
+Confidence Summary
+“Model is 91% confident this video is Deepfake.”
+Numeric output
+
+
+
+Image deepfake dataset:
+
+OpenForensics
+
+http://socia-lab.di.ubi.pt/~jcneves/iFakeFaceDB.zip
+
+
+
+
+LBP, Local Binary Patterns
+HOG, Histogram of Oriented Gradients
+Color Stats, mean, std, skew per channel
+Landmarks, symmetry, distances
+
+
+
+LBP : Captures texture-level face artifacts. Easy to compute (cv2).
+HOG : Detects edge inconsistencies and blending. Pairs well with LBP.
+Color statistics : Detects abnormal color shifts or compression differences.
+Landmark-based geometry : Useful for detecting warping / facial geometry inconsistencies.
